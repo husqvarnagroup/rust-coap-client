@@ -37,15 +37,15 @@ impl Tokio {
                     // Receive from control channel
                     ctl = ctl_rx.recv() => {
                         match ctl {
-                            Some(Ctl::Register(token, rx)) => {
-                                debug!("Register handler: {:x}", token);
-                                handles.insert(token, rx);
+                            Some(Ctl::Register(peer_addr, token, rx)) => {
+                                debug!("Register handler: {}{:x}", peer_addr, token);
+                                handles.insert((peer_addr, token), rx);
                             },
-                            Some(Ctl::Deregister(token)) => {
-                                debug!("Deregister handler: {:x}", token);
-                                handles.remove(&token);
+                            Some(Ctl::Deregister(peer_addr, token)) => {
+                                debug!("Deregister handler: {}{:x}", peer_addr, token);
+                                handles.remove(&(peer_addr, token));
                             },
-                            Some(Ctl::Send(data, peer_addr)) => {
+                            Some(Ctl::Send(peer_addr, data)) => {
                                 trace!("Tx: {:02x?}", data);
                                 if let Err(e) = udp_sock.send_to(&data[..], peer_addr).await {
                                     error!("net transmit error: {:?}", e);

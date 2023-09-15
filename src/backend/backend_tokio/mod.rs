@@ -30,16 +30,16 @@ pub struct Tokio {
 
 #[derive(Debug)]
 enum Ctl {
-    Register(u32, Sender<Packet>),
-    Deregister(u32),
-    Send(Vec<u8>, SocketAddr),
+    Register(SocketAddr, u32, Sender<Packet>),
+    Deregister(SocketAddr, u32),
+    Send(SocketAddr, Vec<u8>),
     Exit,
 }
 
 impl Tokio {
     /// Helper for handling received data (transport-independent)
     async fn handle_rx(
-        handles: &mut HashMap<u32, Sender<Packet>>,
+        handles: &mut HashMap<(SocketAddr, u32), Sender<Packet>>,
         data: &[u8],
         peer_addr: SocketAddr,
         tx: Sender<Ctl>,
@@ -69,7 +69,7 @@ impl Tokio {
         debug!("Received packet: {:x?}", packet);
 
         // Lookup response handle and send reset if no handle matches
-        let handle = match handles.get(&token).map(|v| v.clone()) {
+        let handle = match handles.get(&(peer_addr, token)).map(|v| v.clone()) {
             Some(h) => h,
             None => {
                 debug!("No registered handle for token: {:x}, sending reset", token);
@@ -82,7 +82,7 @@ impl Tokio {
                 request.set_token(packet.get_token().to_vec());
 
                 let encoded = request.to_bytes().unwrap();
-                tx.send(Ctl::Send(encoded, peer_addr)).await.unwrap();
+                tx.send(Ctl::Send(peer_addr, encoded)).await.unwrap();
 
                 return Ok(());
             }
@@ -99,7 +99,7 @@ impl Tokio {
             ack.set_token(packet.get_token().to_vec());
 
             let encoded = ack.to_bytes().unwrap();
-            tx.send(Ctl::Send(encoded, peer_addr)).await.unwrap();
+            tx.send(Ctl::Send(peer_addr, encoded)).await.unwrap();
         }
 
         debug!(
@@ -110,7 +110,7 @@ impl Tokio {
         // Forward to requester
         if let Err(_e) = handle.send(packet.clone()).await {
             debug!("Response channel dropped, removing handler");
-            handles.remove(&token);
+            handles.remove(&(peer_addr, token));
 
             // TODO: we could also send a reset here?
             // however, we'll get it next round anyway
@@ -167,7 +167,7 @@ impl Tokio {
             let data = req.to_bytes().unwrap();
 
             // Issue request
-            if let Err(e) = ctl_tx.send(Ctl::Send(data, peer_addr)).await {
+            if let Err(e) = ctl_tx.send(Ctl::Send(peer_addr, data)).await {
                 error!("Raw send error: {:?}", e);
                 break;
             }
@@ -201,7 +201,7 @@ impl Tokio {
         let token = crate::token_as_u32(req.get_token());
 
         // Register handler
-        if let Err(e) = ctl_tx.send(Ctl::Register(token, tx)).await {
+        if let Err(e) = ctl_tx.send(Ctl::Register(peer_addr, token, tx)).await {
             error!("Register send error: {:?}", e);
             return Err(Error::new(ErrorKind::Other, "Register send failed"));
         }
@@ -210,7 +210,7 @@ impl Tokio {
         let resp = Self::do_send_retry(ctl_tx.clone(), &mut rx, req, peer_addr, opts).await;
 
         // Remove handler
-        if let Err(e) = ctl_tx.send(Ctl::Deregister(token)).await {
+        if let Err(e) = ctl_tx.send(Ctl::Deregister(peer_addr, token)).await {
             error!("Deregister send error: {:?}", e);
             return Err(Error::new(ErrorKind::Other, "Deregister send failed"));
         }
@@ -230,17 +230,24 @@ impl Tokio {
         resource: String,
         opts: RequestOptions,
     ) -> Result<(u32, Receiver<Packet>), Error> {
-
         // Create response channel
         let (tx, mut rx) = channel(10);
 
         // Create token
         let token = rand::random::<u32>();
 
-        debug!("Setup observe for resource: {} (token: {:02x?})", resource, token.to_le_bytes());
+        debug!(
+            "Setup observe for resource: {}/{} (token: {:02x?})",
+            peer_addr,
+            resource,
+            token.to_le_bytes()
+        );
 
         // Register handler
-        if let Err(e) = ctl_tx.send(Ctl::Register(token, tx.clone())).await {
+        if let Err(e) = ctl_tx
+            .send(Ctl::Register(peer_addr, token, tx.clone()))
+            .await
+        {
             error!("Register send error: {:?}", e);
             return Err(Error::new(ErrorKind::Other, "Register send failed"));
         }
@@ -283,7 +290,7 @@ impl Tokio {
                     Ok((token, rx))
                 } else {
                     debug!("Server refused observe request");
-                    let _ = ctl_tx.send(Ctl::Deregister(token)).await;
+                    let _ = ctl_tx.send(Ctl::Deregister(peer_addr, token)).await;
                     Err(Error::new(
                         ErrorKind::ConnectionRefused,
                         "Observe request refused",
@@ -292,12 +299,12 @@ impl Tokio {
             }
             Ok(None) => {
                 debug!("Timeout registering observer");
-                let _ = ctl_tx.send(Ctl::Deregister(token)).await;
+                let _ = ctl_tx.send(Ctl::Deregister(peer_addr, token)).await;
                 Err(Error::new(ErrorKind::TimedOut, "Request timed out"))
             }
             Err(e) => {
                 debug!("Error registering ovbserver: {:?}", e);
-                let _ = ctl_tx.send(Ctl::Deregister(token)).await;
+                let _ = ctl_tx.send(Ctl::Deregister(peer_addr, token)).await;
                 Err(e)
             }
         }
@@ -362,7 +369,7 @@ impl Tokio {
         }
 
         // De-register local handler
-        if let Err(e) = ctl_tx.try_send(Ctl::Deregister(token)) {
+        if let Err(e) = ctl_tx.try_send(Ctl::Deregister(peer_addr, token)) {
             debug!("Error sending deregister command: {:?}", e)
         }
 
