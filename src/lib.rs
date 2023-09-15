@@ -12,8 +12,10 @@ use log::{debug, error};
 use structopt::StructOpt;
 use strum_macros::{Display, EnumString, EnumVariantNames};
 
+pub use coap_lite::Packet;
 pub use coap_lite::RequestType as Method;
-use coap_lite::{CoapRequest, MessageType, Packet, ResponseType};
+use coap_lite::{CoapRequest, MessageType};
+pub use coap_lite::{MessageClass, ResponseType};
 
 pub mod backend;
 pub use backend::Backend;
