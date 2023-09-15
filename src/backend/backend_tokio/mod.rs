@@ -119,6 +119,7 @@ impl Tokio {
         Ok(())
     }
 
+    /*
     /// Helper to create UDP connections
     async fn udp_connect(host: &str) -> Result<tokio::net::UdpSocket, Error> {
         // Resolve peer address to determine local socket type
@@ -149,6 +150,7 @@ impl Tokio {
 
         Ok(udp_sock)
     }
+    */
 
     // Helper for running request / responses
     async fn do_send_retry(

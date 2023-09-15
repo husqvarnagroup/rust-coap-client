@@ -4,12 +4,9 @@ use std::time::Duration;
 /// Rust Async CoAP Client
 // https://github.com/ryankurte/rust-coap-client
 // Copyright 2021 ryan kurte <ryan@kurte.nz>
-use std::{
-    convert::{TryFrom, TryInto},
-    marker::PhantomData,
-};
+use std::{convert::TryFrom, marker::PhantomData};
 
-use log::{debug, error};
+use log::error;
 use structopt::StructOpt;
 use strum_macros::{Display, EnumString, EnumVariantNames};
 
@@ -239,7 +236,7 @@ impl TokioClient {
     pub async fn new(
         scheme: Transport,
         bind_addr: &str,
-        opts: &ClientOptions,
+        _opts: &ClientOptions,
     ) -> Result<Self, std::io::Error> {
         // Create appropriate transport
         let transport = match scheme {
