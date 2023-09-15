@@ -281,6 +281,7 @@ where
         // Build request object
         let mut request = CoapRequest::<&str>::new();
 
+        // TODO: message id must not be completely random, otherwise two consequal messages might have the same id and the message gets ignored by the receiver
         request.message.header.message_id = rand::random();
 
         request.set_method(method);
