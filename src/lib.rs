@@ -281,7 +281,7 @@ where
         // Build request object
         let mut request = CoapRequest::<&str>::new();
 
-        // TODO: message id must not be completely random, otherwise two consequal messages might have the same id and the message gets ignored by the receiver
+        // TODO: message id must not be completely random, otherwise two consequal messages might have the same id and the message gets ignored by the receiver. aiocoap starts at a random value and then increments by one for each new message.
         request.message.header.message_id = rand::random();
 
         request.set_method(method);
@@ -296,6 +296,8 @@ where
             request.message.payload = d.to_vec();
         }
 
+        // TODO: also make sure token is not already used, maybe also start at random and increment for every new message as aiocoap does
+        // note: message id correlates acks, token correlate responses
         let t = rand::random::<u32>();
         let token = t.to_le_bytes().to_vec();
         request.message.set_token(token);

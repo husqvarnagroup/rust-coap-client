@@ -164,6 +164,7 @@ impl Tokio {
         let mut resp = Ok(None);
         for i in 0..opts.retries {
             // TODO: control / bump message_id each retry?
+            //  -> no, because message_id is also used for duplicate detection
 
             // Encode data
             let data = req.to_bytes().unwrap();
