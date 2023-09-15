@@ -14,11 +14,14 @@ use crate::COAP_MTU;
 
 impl Tokio {
     // Helper for creating a UDP client instance
-    pub(crate) async fn new_udp(peer: &str) -> Result<Self, Error> {
+    pub(crate) async fn new_udp(bind_addr: &str) -> Result<Self, Error> {
         debug!("Creating UDP listener");
 
-        // Connect to UDP socket
-        let udp_sock = Self::udp_connect(peer).await?;
+        // Bind to local socket
+        let udp_sock = tokio::net::UdpSocket::bind(bind_addr).await.map_err(|e| {
+            error!("Error binding local socket: {:?}", e);
+            e
+        })?;
 
         // Setup control channel
         let (ctl_tx, mut ctl_rx) = channel::<Ctl>(1000);
@@ -42,9 +45,9 @@ impl Tokio {
                                 debug!("Deregister handler: {:x}", token);
                                 handles.remove(&token);
                             },
-                            Some(Ctl::Send(data)) => {
+                            Some(Ctl::Send(data, peer_addr)) => {
                                 trace!("Tx: {:02x?}", data);
-                                if let Err(e) = udp_sock.send(&data[..]).await {
+                                if let Err(e) = udp_sock.send_to(&data[..], peer_addr).await {
                                     error!("net transmit error: {:?}", e);
                                     break;
                                 }
@@ -57,9 +60,9 @@ impl Tokio {
                         }
                     }
                     // Receive from the bound socket
-                    r = udp_sock.recv(&mut buff) => {
-                        let data = match r {
-                            Ok(n) => &buff[..n],
+                    r = udp_sock.recv_from(&mut buff) => {
+                        let (data, peer_addr) = match r {
+                            Ok((n, a)) => (&buff[..n], a),
                             Err(e) => {
                                 error!("net receive error: {:?}", e);
                                 break;
@@ -69,7 +72,7 @@ impl Tokio {
                         trace!("Rx: {:02x?}", data);
 
                         // Handle received data
-                        if let Err(e) = Self::handle_rx(&mut handles, data, l_ctl_tx.clone()).await {
+                        if let Err(e) = Self::handle_rx(&mut handles, data, peer_addr, l_ctl_tx.clone()).await {
                             error!("net handle error: {:?}", e);
                             break;
                         }

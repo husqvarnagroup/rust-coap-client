@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;
 /// Rust Async CoAP Client
@@ -235,31 +236,17 @@ pub type TokioClient = Client<std::io::Error, backend::Tokio>;
 #[cfg(feature = "backend-tokio")]
 impl TokioClient {
     /// Create a new client with the provided host and client options
-    pub async fn connect<H>(host: H, opts: &ClientOptions) -> Result<Self, std::io::Error>
-    where
-        H: TryInto<HostOptions>,
-        <H as TryInto<HostOptions>>::Error: std::fmt::Debug,
-    {
-        // Convert provided host options
-        let peer: HostOptions = match host.try_into() {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Error parsing host options: {:?}", e);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Invalid host options",
-                ));
-            }
-        };
-        let connect_str = format!("{}:{}", peer.host, peer.port);
-        debug!("Using host options: {:?} (connect: {})", peer, connect_str);
-
+    pub async fn new(
+        scheme: Transport,
+        bind_addr: &str,
+        opts: &ClientOptions,
+    ) -> Result<Self, std::io::Error> {
         // Create appropriate transport
-        let transport = match &peer.scheme {
-            Transport::Udp => backend::Tokio::new_udp(&connect_str).await?,
-            Transport::Dtls => backend::Tokio::new_dtls(&connect_str, opts).await?,
+        let transport = match scheme {
+            Transport::Udp => backend::Tokio::new_udp(bind_addr).await?,
+            // Transport::Dtls => backend::Tokio::new_dtls(&connect_str, opts).await?,
             _ => {
-                error!("Transport '{}' not yet implemented", peer.scheme);
+                error!("Transport '{}' not yet implemented", scheme);
                 unimplemented!()
             }
         };
@@ -287,8 +274,9 @@ where
 {
     /// Perform a basic CoAP request
     pub async fn request(
-        &mut self,
+        &self,
         method: Method,
+        peer_addr: SocketAddr,
         resource: &str,
         data: Option<&[u8]>,
         opts: &RequestOptions,
@@ -317,7 +305,7 @@ where
         // Send request via backing transport
         let resp = self
             .transport
-            .request(request.message, opts.clone())
+            .request(request.message, peer_addr, opts.clone())
             .await
             .map_err(Error::Transport)?;
 
@@ -329,11 +317,12 @@ where
     /// Observe the provided resource
     pub async fn observe(
         &mut self,
+        peer_addr: SocketAddr,
         resource: &str,
         opts: &RequestOptions,
     ) -> Result<<T as Backend<E>>::Observe, E> {
         self.transport
-            .observe(resource.to_string(), opts.clone())
+            .observe(peer_addr, resource.to_string(), opts.clone())
             .await
     }
 
@@ -345,32 +334,41 @@ where
     /// Perform a Get request from the provided resource
     pub async fn get(
         &mut self,
+        peer_addr: SocketAddr,
         resource: &str,
         opts: &RequestOptions,
     ) -> Result<Vec<u8>, Error<E>> {
-        let resp = self.request(Method::Get, resource, None, opts).await?;
+        let resp = self
+            .request(Method::Get, peer_addr, resource, None, opts)
+            .await?;
         Ok(resp.payload)
     }
 
     /// Perform a Put request to the provided resource
     pub async fn put(
         &mut self,
+        peer_addr: SocketAddr,
         resource: &str,
         data: Option<&[u8]>,
         opts: &RequestOptions,
     ) -> Result<Vec<u8>, Error<E>> {
-        let resp = self.request(Method::Put, resource, data, opts).await?;
+        let resp = self
+            .request(Method::Put, peer_addr, resource, data, opts)
+            .await?;
         Ok(resp.payload)
     }
 
     /// Perform a Post request to the provided resource
     pub async fn post(
         &mut self,
+        peer_addr: SocketAddr,
         resource: &str,
         data: Option<&[u8]>,
         opts: &RequestOptions,
     ) -> Result<Vec<u8>, Error<E>> {
-        let resp = self.request(Method::Post, resource, data, opts).await?;
+        let resp = self
+            .request(Method::Post, peer_addr, resource, data, opts)
+            .await?;
         Ok(resp.payload)
     }
 }

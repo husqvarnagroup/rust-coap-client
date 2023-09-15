@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 use coap_lite::Packet;
 use futures::{Future, Stream};
+use std::net::SocketAddr;
 
 use crate::RequestOptions;
 
@@ -26,10 +27,19 @@ pub trait Observer<E>: Stream<Item = Result<Packet, E>> + Send {
 pub trait Backend<E>: Send {
     type Observe: Observer<E>;
 
-    async fn request(&mut self, req: Packet, opts: RequestOptions) -> Result<Packet, E>;
+    async fn request(
+        &self,
+        req: Packet,
+        peer_addr: SocketAddr,
+        opts: RequestOptions,
+    ) -> Result<Packet, E>;
 
-    async fn observe(&mut self, resource: String, opts: RequestOptions)
-        -> Result<Self::Observe, E>;
+    async fn observe(
+        &mut self,
+        peer_addr: SocketAddr,
+        resource: String,
+        opts: RequestOptions,
+    ) -> Result<Self::Observe, E>;
 
     async fn unobserve(&mut self, o: Self::Observe) -> Result<(), E>;
 }

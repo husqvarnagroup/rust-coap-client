@@ -19,7 +19,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use super::{Backend, Observer};
 use crate::{status_is_ok, RequestOptions};
 
-mod dtls;
+// mod dtls;
 mod udp;
 
 /// Tokio backend for coap-client
@@ -32,7 +32,7 @@ pub struct Tokio {
 enum Ctl {
     Register(u32, Sender<Packet>),
     Deregister(u32),
-    Send(Vec<u8>),
+    Send(Vec<u8>, SocketAddr),
     Exit,
 }
 
@@ -41,6 +41,7 @@ impl Tokio {
     async fn handle_rx(
         handles: &mut HashMap<u32, Sender<Packet>>,
         data: &[u8],
+        peer_addr: SocketAddr,
         tx: Sender<Ctl>,
     ) -> Result<(), Error> {
         // Decode packet
@@ -81,7 +82,7 @@ impl Tokio {
                 request.set_token(packet.get_token().to_vec());
 
                 let encoded = request.to_bytes().unwrap();
-                tx.send(Ctl::Send(encoded)).await.unwrap();
+                tx.send(Ctl::Send(encoded, peer_addr)).await.unwrap();
 
                 return Ok(());
             }
@@ -98,7 +99,7 @@ impl Tokio {
             ack.set_token(packet.get_token().to_vec());
 
             let encoded = ack.to_bytes().unwrap();
-            tx.send(Ctl::Send(encoded)).await.unwrap();
+            tx.send(Ctl::Send(encoded, peer_addr)).await.unwrap();
         }
 
         debug!(
@@ -154,6 +155,7 @@ impl Tokio {
         ctl_tx: Sender<Ctl>,
         rx: &mut Receiver<Packet>,
         req: Packet,
+        peer_addr: SocketAddr,
         opts: RequestOptions,
     ) -> Result<Option<Packet>, Error> {
         // Send request and await response for the allowed number of retries
@@ -165,7 +167,7 @@ impl Tokio {
             let data = req.to_bytes().unwrap();
 
             // Issue request
-            if let Err(e) = ctl_tx.send(Ctl::Send(data)).await {
+            if let Err(e) = ctl_tx.send(Ctl::Send(data, peer_addr)).await {
                 error!("Raw send error: {:?}", e);
                 break;
             }
@@ -191,6 +193,7 @@ impl Tokio {
     async fn do_request(
         ctl_tx: Sender<Ctl>,
         req: Packet,
+        peer_addr: SocketAddr,
         opts: RequestOptions,
     ) -> Result<Packet, Error> {
         // Create request handle
@@ -204,7 +207,7 @@ impl Tokio {
         }
 
         // Send request and await response for the allowed number of retries
-        let resp = Self::do_send_retry(ctl_tx.clone(), &mut rx, req, opts).await;
+        let resp = Self::do_send_retry(ctl_tx.clone(), &mut rx, req, peer_addr, opts).await;
 
         // Remove handler
         if let Err(e) = ctl_tx.send(Ctl::Deregister(token)).await {
@@ -223,6 +226,7 @@ impl Tokio {
     // Helper for executing observations
     async fn do_observe(
         ctl_tx: Sender<Ctl>,
+        peer_addr: SocketAddr,
         resource: String,
         opts: RequestOptions,
     ) -> Result<(u32, Receiver<Packet>), Error> {
@@ -257,7 +261,7 @@ impl Tokio {
         // Execute register command
 
         // Send request and await response for the allowed number of retries
-        let resp = Self::do_send_retry(ctl_tx.clone(), &mut rx, register, opts).await;
+        let resp = Self::do_send_retry(ctl_tx.clone(), &mut rx, register, peer_addr, opts).await;
 
         // Handle responses
         match resp {
@@ -302,6 +306,7 @@ impl Tokio {
     async fn do_unobserve(
         ctl_tx: Sender<Ctl>,
         token: u32,
+        peer_addr: SocketAddr,
         resource: String,
         mut rx: Receiver<Packet>,
     ) -> Result<(), Error> {
@@ -327,6 +332,7 @@ impl Tokio {
             ctl_tx.clone(),
             &mut rx,
             deregister,
+            peer_addr,
             RequestOptions::default(),
         )
         .await;
@@ -400,6 +406,7 @@ unsafe impl<T> Send for TokioRequest<T> {}
 
 pub struct TokioObserve {
     token: u32,
+    peer_addr: SocketAddr,
     resource: String,
     rx: Receiver<Packet>,
 }
@@ -433,28 +440,32 @@ impl Backend<std::io::Error> for Tokio {
     type Observe = TokioObserve;
 
     async fn request(
-        &mut self,
+        &self,
         req: Packet,
+        peer_addr: SocketAddr,
         opts: RequestOptions,
     ) -> Result<Packet, std::io::Error> {
-        Tokio::do_request(self.ctl_tx.clone(), req, opts).await
+        Tokio::do_request(self.ctl_tx.clone(), req, peer_addr, opts).await
     }
 
     async fn observe(
         &mut self,
+        peer_addr: SocketAddr,
         resource: String,
         opts: RequestOptions,
     ) -> Result<Self::Observe, std::io::Error> {
-        let (token, rx) = Tokio::do_observe(self.ctl_tx.clone(), resource.clone(), opts).await?;
+        let (token, rx) =
+            Tokio::do_observe(self.ctl_tx.clone(), peer_addr, resource.clone(), opts).await?;
         Ok(TokioObserve {
             token,
+            peer_addr,
             resource,
             rx,
         })
     }
 
     async fn unobserve(&mut self, o: Self::Observe) -> Result<(), std::io::Error> {
-        Tokio::do_unobserve(self.ctl_tx.clone(), o.token, o.resource, o.rx).await
+        Tokio::do_unobserve(self.ctl_tx.clone(), o.token, o.peer_addr, o.resource, o.rx).await
     }
 }
 
