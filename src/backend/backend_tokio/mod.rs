@@ -56,6 +56,7 @@ impl Tokio {
         // Convert to response
         match packet.header.code {
             MessageClass::Response(_) => (),
+            // TODO: accept empty acks
             _ => {
                 //debug!("packet was not response type: {:?}", packet);
                 //return Err(Error::new(ErrorKind::InvalidData, "unexpected packet type"));
@@ -175,6 +176,7 @@ impl Tokio {
                 break;
             }
 
+            // TODO: decouple ack from response
             // Await response
             match tokio::time::timeout(opts.timeout, rx.recv()).await {
                 Ok(Some(v)) => {
