@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;
@@ -262,7 +264,7 @@ impl TokioClient {
 }
 
 /// Mark clients as Send if the backend is
-unsafe impl<E, B: Backend<E> + Send> Send for Client<E, B> {}
+// unsafe impl<E, B: Backend<E> + Send> Send for Client<E, B> {}
 
 impl<E, T> Client<E, T>
 where

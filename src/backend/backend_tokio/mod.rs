@@ -412,7 +412,7 @@ impl<T> Future for TokioRequest<T> {
     }
 }
 
-unsafe impl<T> Send for TokioRequest<T> {}
+// unsafe impl<T> Send for TokioRequest<T> {}
 
 pub struct TokioObserve {
     token: u32,
@@ -421,7 +421,7 @@ pub struct TokioObserve {
     rx: Receiver<Packet>,
 }
 
-unsafe impl Send for TokioObserve {}
+// unsafe impl Send for TokioObserve {}
 
 impl Observer<Error> for TokioObserve {
     fn token(&self) -> u32 {
