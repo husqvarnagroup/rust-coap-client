@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::time::Duration;
 /// Rust Async CoAP Client
 // https://github.com/ryankurte/rust-coap-client
@@ -18,6 +19,7 @@ use coap_lite::{CoapRequest, MessageType};
 pub use coap_lite::{MessageClass, ResponseType};
 
 pub mod backend;
+
 pub use backend::Backend;
 
 pub const COAP_MTU: usize = 1600;
@@ -225,6 +227,8 @@ impl TryFrom<&str> for HostOptions {
 /// Async CoAP client, generic over Backend implementations
 pub struct Client<E, T: Backend<E>> {
     transport: T,
+    message_id: AtomicU16,
+    token: AtomicU32,
     _e: PhantomData<E>,
 }
 
@@ -253,6 +257,8 @@ impl TokioClient {
         // Return client object
         Ok(Self {
             transport,
+            message_id: AtomicU16::new(rand::random()),
+            token: AtomicU32::new(rand::random()),
             _e: PhantomData,
         })
     }
@@ -283,8 +289,7 @@ where
         // Build request object
         let mut request = CoapRequest::<&str>::new();
 
-        // TODO: message id must not be completely random, otherwise two consequal messages might have the same id and the message gets ignored by the receiver. aiocoap starts at a random value and then increments by one for each new message.
-        request.message.header.message_id = rand::random();
+        request.message.header.message_id = self.next_message_id();
 
         request.set_method(method);
         request.set_path(resource);
@@ -298,10 +303,7 @@ where
             request.message.payload = d.to_vec();
         }
 
-        // TODO: also make sure token is not already used, maybe also start at random and increment for every new message as aiocoap does
-        // note: message id correlates acks, token correlate responses
-        let t = rand::random::<u32>();
-        let token = t.to_le_bytes().to_vec();
+        let token = self.next_token().to_le_bytes().to_vec();
         request.message.set_token(token);
 
         // Send request via backing transport
@@ -372,6 +374,14 @@ where
             .request(Method::Post, peer_addr, resource, data, opts)
             .await?;
         Ok(resp.payload)
+    }
+
+    fn next_message_id(&self) -> u16 {
+        self.message_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn next_token(&self) -> u32 {
+        self.token.fetch_add(1, Ordering::Relaxed)
     }
 }
 
