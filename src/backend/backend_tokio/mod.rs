@@ -55,6 +55,7 @@ impl Tokio {
 
         // Convert to response
         match packet.header.code {
+            MessageClass::Empty => return Ok(()), // ignore empty ACKs for now, TODO: do better
             MessageClass::Response(_) => (),
             // TODO: accept empty acks
             _ => {
