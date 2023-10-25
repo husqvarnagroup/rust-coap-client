@@ -70,8 +70,11 @@ pub struct RequestOptions {
     /// Number of retries (for acknowleged messages)
     pub retries: usize,
     #[structopt(long, parse(try_from_str = humantime::parse_duration), default_value = "2s")]
-    /// Request -> response timeout
-    pub timeout: Duration,
+    /// Request -> ACK timeout, per retry
+    pub ack_timeout: Duration,
+    #[structopt(long, parse(try_from_str = humantime::parse_duration), default_value = "60s")]
+    /// Request -> response timeout, after receiving empty ACK
+    pub response_timeout: Duration,
     #[structopt(long, parse(try_from_str = humantime::parse_duration), default_value = "500ms")]
     /// Base period for exponential backoff
     pub backoff: Duration,
@@ -82,7 +85,8 @@ impl Default for RequestOptions {
         Self {
             non_confirmable: false,
             retries: 3,
-            timeout: Duration::from_secs(2),
+            ack_timeout: Duration::from_secs(2),
+            response_timeout: Duration::from_secs(60),
             backoff: Duration::from_millis(500),
         }
     }

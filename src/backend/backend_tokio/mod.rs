@@ -30,8 +30,10 @@ pub struct Tokio {
 
 #[derive(Debug)]
 enum Ctl {
-    Register(SocketAddr, u32, Sender<Packet>),
-    Deregister(SocketAddr, u32),
+    RegisterMessageId(SocketAddr, u16, Sender<Packet>),
+    DeregisterMessageId(SocketAddr, u16),
+    RegisterToken(SocketAddr, u32, Sender<Packet>),
+    DeregisterToken(SocketAddr, u32),
     Send(SocketAddr, Vec<u8>),
     Exit,
 }
@@ -39,7 +41,8 @@ enum Ctl {
 impl Tokio {
     /// Helper for handling received data (transport-independent)
     async fn handle_rx(
-        handles: &mut HashMap<(SocketAddr, u32), Sender<Packet>>,
+        message_id_handles: &mut HashMap<(SocketAddr, u16), Sender<Packet>>,
+        token_handles: &mut HashMap<(SocketAddr, u32), Sender<Packet>>,
         data: &[u8],
         peer_addr: SocketAddr,
         tx: Sender<Ctl>,
@@ -55,9 +58,30 @@ impl Tokio {
 
         // Convert to response
         match packet.header.code {
-            MessageClass::Empty => return Ok(()), // ignore empty ACKs for now, TODO: do better
+            MessageClass::Empty if packet.header.get_type() == MessageType::Acknowledgement => {
+                let mid = packet.header.message_id;
+                debug!("Received empty ack for message id: {}", mid);
+                let handle = match message_id_handles.get(&(peer_addr, mid)).cloned() {
+                    Some(h) => h,
+                    None => {
+                        debug!("No registered handle for message id: {}, ignoring", mid);
+                        return Ok(());
+                    }
+                };
+
+                debug!(
+                    "Found handler for message id: {}, forwarding to caller",
+                    mid
+                );
+
+                // Forward to requester
+                if let Err(_e) = handle.send(packet.clone()).await {
+                    debug!("Response channel dropped, removing handler");
+                    message_id_handles.remove(&(peer_addr, mid));
+                }
+                return Ok(());
+            }
             MessageClass::Response(_) => (),
-            // TODO: accept empty acks
             _ => {
                 //debug!("packet was not response type: {:?}", packet);
                 //return Err(Error::new(ErrorKind::InvalidData, "unexpected packet type"));
@@ -71,7 +95,7 @@ impl Tokio {
         debug!("Received packet: {:x?}", packet);
 
         // Lookup response handle and send reset if no handle matches
-        let handle = match handles.get(&(peer_addr, token)).map(|v| v.clone()) {
+        let handle = match token_handles.get(&(peer_addr, token)).cloned() {
             Some(h) => h,
             None => {
                 debug!("No registered handle for token: {:x}, sending reset", token);
@@ -95,10 +119,9 @@ impl Tokio {
             debug!("Sending ACK for message: {}", packet.header.message_id);
 
             let mut ack = Packet::new();
-            ack.header.message_id = packet.header.message_id;
-            ack.header.code = MessageClass::Response(ResponseType::Content);
             ack.header.set_type(MessageType::Acknowledgement);
-            ack.set_token(packet.get_token().to_vec());
+            ack.header.code = MessageClass::Empty;
+            ack.header.message_id = packet.header.message_id;
 
             let encoded = ack.to_bytes().unwrap();
             tx.send(Ctl::Send(peer_addr, encoded)).await.unwrap();
@@ -112,7 +135,7 @@ impl Tokio {
         // Forward to requester
         if let Err(_e) = handle.send(packet.clone()).await {
             debug!("Response channel dropped, removing handler");
-            handles.remove(&(peer_addr, token));
+            token_handles.remove(&(peer_addr, token));
 
             // TODO: we could also send a reset here?
             // however, we'll get it next round anyway
@@ -157,17 +180,27 @@ impl Tokio {
     // Helper for running request / responses
     async fn do_send_retry(
         ctl_tx: Sender<Ctl>,
+        tx: Option<Sender<Packet>>,
         rx: &mut Receiver<Packet>,
         req: Packet,
         peer_addr: SocketAddr,
         opts: RequestOptions,
     ) -> Result<Option<Packet>, Error> {
+        // Register ACK handler
+        // TODO: handling empty acks for unobserve requests not handled
+        if let Some(tx) = tx {
+            if let Err(e) = ctl_tx
+                .send(Ctl::RegisterMessageId(peer_addr, req.header.message_id, tx))
+                .await
+            {
+                error!("Register send error: {:?}", e);
+                return Err(Error::new(ErrorKind::Other, "Register send failed"));
+            }
+        }
+
         // Send request and await response for the allowed number of retries
         let mut resp = Ok(None);
         for i in 0..opts.retries {
-            // TODO: control / bump message_id each retry?
-            //  -> no, because message_id is also used for duplicate detection
-
             // Encode data
             let data = req.to_bytes().unwrap();
 
@@ -177,22 +210,52 @@ impl Tokio {
                 break;
             }
 
-            // TODO: decouple ack from response
             // Await response
-            match tokio::time::timeout(opts.timeout, rx.recv()).await {
+            match tokio::time::timeout(opts.ack_timeout, rx.recv()).await {
                 Ok(Some(v)) => {
                     resp = Ok(Some(v));
                     break;
                 }
                 Ok(None) | Err(_) => {
-                    debug!("Timeout awaiting response (retry {})", i);
+                    debug!("Timeout awaiting ACK (retry {})", i);
                     // TODO: await backoff
                     continue;
                 }
             };
         }
 
-        resp
+        if let Err(e) = ctl_tx
+            .send(Ctl::DeregisterMessageId(peer_addr, req.header.message_id))
+            .await
+        {
+            error!("Deregister send error: {:?}", e);
+            return Err(Error::new(ErrorKind::Other, "Deregister send failed"));
+        }
+
+        if let Ok(Some(ref packet)) = resp {
+            if !Self::is_empty_ack(packet) {
+                return resp;
+            }
+        }
+
+        // just received an empty ack, await separate response
+        tokio::time::timeout(opts.response_timeout, async {
+            loop {
+                match rx.recv().await {
+                    Some(v) if Self::is_empty_ack(&v) => continue,
+                    Some(v) => break Ok(Some(v)),
+                    None => {
+                        debug!("Channel closed while awaiting response");
+                        break Ok(None);
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            debug!("Timeout awaiting response");
+            Ok(None)
+        })
     }
 
     // Helper for executing requests
@@ -207,16 +270,20 @@ impl Tokio {
         let token = crate::token_as_u32(req.get_token());
 
         // Register handler
-        if let Err(e) = ctl_tx.send(Ctl::Register(peer_addr, token, tx)).await {
+        if let Err(e) = ctl_tx
+            .send(Ctl::RegisterToken(peer_addr, token, tx.clone()))
+            .await
+        {
             error!("Register send error: {:?}", e);
             return Err(Error::new(ErrorKind::Other, "Register send failed"));
         }
 
         // Send request and await response for the allowed number of retries
-        let resp = Self::do_send_retry(ctl_tx.clone(), &mut rx, req, peer_addr, opts).await;
+        let resp =
+            Self::do_send_retry(ctl_tx.clone(), Some(tx), &mut rx, req, peer_addr, opts).await;
 
         // Remove handler
-        if let Err(e) = ctl_tx.send(Ctl::Deregister(peer_addr, token)).await {
+        if let Err(e) = ctl_tx.send(Ctl::DeregisterToken(peer_addr, token)).await {
             error!("Deregister send error: {:?}", e);
             return Err(Error::new(ErrorKind::Other, "Deregister send failed"));
         }
@@ -252,7 +319,7 @@ impl Tokio {
 
         // Register handler
         if let Err(e) = ctl_tx
-            .send(Ctl::Register(peer_addr, token, tx.clone()))
+            .send(Ctl::RegisterToken(peer_addr, token, tx.clone()))
             .await
         {
             error!("Register send error: {:?}", e);
@@ -276,7 +343,8 @@ impl Tokio {
         // Execute register command
 
         // Send request and await response for the allowed number of retries
-        let resp = Self::do_send_retry(ctl_tx.clone(), &mut rx, register, peer_addr, opts).await;
+        let resp =
+            Self::do_send_retry(ctl_tx.clone(), Some(tx), &mut rx, register, peer_addr, opts).await;
 
         // Handle responses
         match resp {
@@ -298,7 +366,7 @@ impl Tokio {
                     Ok((token, rx))
                 } else {
                     debug!("Server refused observe request");
-                    let _ = ctl_tx.send(Ctl::Deregister(peer_addr, token)).await;
+                    let _ = ctl_tx.send(Ctl::DeregisterToken(peer_addr, token)).await;
                     Err(Error::new(
                         ErrorKind::ConnectionRefused,
                         "Observe request refused",
@@ -307,12 +375,12 @@ impl Tokio {
             }
             Ok(None) => {
                 debug!("Timeout registering observer");
-                let _ = ctl_tx.send(Ctl::Deregister(peer_addr, token)).await;
+                let _ = ctl_tx.send(Ctl::DeregisterToken(peer_addr, token)).await;
                 Err(Error::new(ErrorKind::TimedOut, "Request timed out"))
             }
             Err(e) => {
                 debug!("Error registering ovbserver: {:?}", e);
-                let _ = ctl_tx.send(Ctl::Deregister(peer_addr, token)).await;
+                let _ = ctl_tx.send(Ctl::DeregisterToken(peer_addr, token)).await;
                 Err(e)
             }
         }
@@ -346,6 +414,7 @@ impl Tokio {
         // Send de-register with retries
         let resp = Self::do_send_retry(
             ctl_tx.clone(),
+            None,
             &mut rx,
             deregister,
             peer_addr,
@@ -378,11 +447,16 @@ impl Tokio {
         }
 
         // De-register local handler
-        if let Err(e) = ctl_tx.try_send(Ctl::Deregister(peer_addr, token)) {
+        if let Err(e) = ctl_tx.try_send(Ctl::DeregisterToken(peer_addr, token)) {
             debug!("Error sending deregister command: {:?}", e)
         }
 
         Ok(())
+    }
+
+    fn is_empty_ack(packet: &Packet) -> bool {
+        packet.header.get_type() == MessageType::Acknowledgement
+            && packet.header.code == MessageClass::Empty
     }
 
     /// Close the CoAP client

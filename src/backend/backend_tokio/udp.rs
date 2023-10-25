@@ -30,20 +30,29 @@ impl Tokio {
         let l_ctl_tx = ctl_tx.clone();
         let _listener = tokio::task::spawn(async move {
             let mut buff = [0u8; COAP_MTU];
-            let mut handles = HashMap::new();
+            let mut message_id_handles = HashMap::new();
+            let mut token_handles = HashMap::new();
 
             loop {
                 tokio::select!(
                     // Receive from control channel
                     ctl = ctl_rx.recv() => {
                         match ctl {
-                            Some(Ctl::Register(peer_addr, token, rx)) => {
-                                debug!("Register handler: {}{:x}", peer_addr, token);
-                                handles.insert((peer_addr, token), rx);
+                            Some(Ctl::RegisterMessageId(peer_addr, message_id, rx)) => {
+                                debug!("Register message id handler: {}{}", peer_addr, message_id);
+                                message_id_handles.insert((peer_addr, message_id), rx);
                             },
-                            Some(Ctl::Deregister(peer_addr, token)) => {
-                                debug!("Deregister handler: {}{:x}", peer_addr, token);
-                                handles.remove(&(peer_addr, token));
+                            Some(Ctl::DeregisterMessageId(peer_addr, message_id)) => {
+                                debug!("Deregister message id handler: {}{}", peer_addr, message_id);
+                                message_id_handles.remove(&(peer_addr, message_id));
+                            },
+                            Some(Ctl::RegisterToken(peer_addr, token, rx)) => {
+                                debug!("Register token handler: {}{:x}", peer_addr, token);
+                                token_handles.insert((peer_addr, token), rx);
+                            },
+                            Some(Ctl::DeregisterToken(peer_addr, token)) => {
+                                debug!("Deregister token handler: {}{:x}", peer_addr, token);
+                                token_handles.remove(&(peer_addr, token));
                             },
                             Some(Ctl::Send(peer_addr, data)) => {
                                 trace!("Tx: {:02x?}", data);
@@ -72,7 +81,7 @@ impl Tokio {
                         trace!("Rx: {:02x?}", data);
 
                         // Handle received data
-                        if let Err(e) = Self::handle_rx(&mut handles, data, peer_addr, l_ctl_tx.clone()).await {
+                        if let Err(e) = Self::handle_rx(&mut message_id_handles, &mut token_handles, data, peer_addr, l_ctl_tx.clone()).await {
                             error!("net handle error: {:?}", e);
                             break;
                         }
