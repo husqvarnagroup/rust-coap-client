@@ -97,7 +97,11 @@ impl Tokio {
         // Lookup response handle and send reset if no handle matches
         let handle = match token_handles.get(&(peer_addr, token)).cloned() {
             Some(h) => h,
-            None => {
+            None if matches!(
+                packet.header.get_type(),
+                MessageType::Confirmable | MessageType::NonConfirmable
+            ) =>
+            {
                 debug!("No registered handle for token: {:x}, sending reset", token);
 
                 // Send connection reset
@@ -105,11 +109,14 @@ impl Tokio {
                 request.header.message_id = packet.header.message_id;
                 request.header.code = MessageClass::Empty;
                 request.header.set_type(MessageType::Reset);
-                request.set_token(packet.get_token().to_vec());
 
                 let encoded = request.to_bytes().unwrap();
                 tx.send(Ctl::Send(peer_addr, encoded)).await.unwrap();
 
+                return Ok(());
+            }
+            None => {
+                debug!("No registered handle for token: {:x}, ignoring", token);
                 return Ok(());
             }
         };
