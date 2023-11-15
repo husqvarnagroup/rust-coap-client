@@ -4,8 +4,9 @@
 
 use async_trait::async_trait;
 use coap_lite::Packet;
-use futures::Stream;
+use futures::{Future, Stream};
 use std::net::SocketAddr;
+use std::pin::Pin;
 
 use crate::RequestOptions;
 
@@ -27,12 +28,12 @@ pub trait Observer<E>: Stream<Item = Result<Packet, E>> + Send {
 pub trait Backend<E>: Send {
     type Observe: Observer<E>;
 
-    async fn request(
+    fn request(
         &self,
         req: Packet,
         peer_addr: SocketAddr,
         opts: RequestOptions,
-    ) -> Result<Packet, E>;
+    ) -> Pin<Box<dyn Future<Output = Result<Packet, E>> + '_>>;
 
     async fn observe(
         &mut self,

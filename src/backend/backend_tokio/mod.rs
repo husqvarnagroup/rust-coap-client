@@ -22,6 +22,63 @@ use crate::{status_is_ok, RequestOptions};
 // mod dtls;
 mod udp;
 
+pub struct DroppableRequest {
+    future: Pin<Box<dyn Future<Output = Result<Packet, Error>> + Send>>,
+    completed: bool,
+    ctl_tx: Sender<Ctl>,
+    peer_addr: SocketAddr,
+    message_id: u16,
+    token: u32,
+}
+
+impl Drop for DroppableRequest {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        debug!("Cancelling incomplete request.");
+
+        // Because we can't use aync in drop(), we use try_send() here, it only fails if the channel
+        // is closed or full. It can get full in the rare case we have to send out a lot of reset
+        // packets.
+        //
+        // TODO: Split the control channel into two different channels, one for Ctl::Send and the
+        //       rest for registering and deregistering tokens and message ids and exiting. Then use
+        //       an unbounded channel for the control channel (but not the Ctl::Send channel),
+        //       because send() in the unbounded channel is always sync.
+        //
+        // We deregister both, message id and token, regardless if any of them has already been
+        // deregistered. We also hope they have not yet been reused, but the same problem also
+        // exists for still ongoing requests.
+        if let Err(e) = self
+            .ctl_tx
+            .try_send(Ctl::DeregisterMessageId(self.peer_addr, self.message_id))
+        {
+            error!("Deregister send error: {:?}", e);
+        }
+        if let Err(e) = self
+            .ctl_tx
+            .try_send(Ctl::DeregisterToken(self.peer_addr, self.token))
+        {
+            error!("Deregister send error: {:?}", e);
+        }
+    }
+}
+
+impl Future for DroppableRequest {
+    type Output = Result<Packet, Error>;
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<<Self as futures::Future>::Output> {
+        let result = self.future.as_mut().poll(cx);
+        if result.is_ready() {
+            self.completed = true;
+        }
+        result
+    }
+}
+
 /// Tokio backend for coap-client
 pub struct Tokio {
     ctl_tx: Sender<Ctl>,
@@ -536,13 +593,23 @@ impl Stream for TokioObserve {
 impl Backend<std::io::Error> for Tokio {
     type Observe = TokioObserve;
 
-    async fn request(
+    fn request(
         &self,
         req: Packet,
         peer_addr: SocketAddr,
         opts: RequestOptions,
-    ) -> Result<Packet, std::io::Error> {
-        Tokio::do_request(self.ctl_tx.clone(), req, peer_addr, opts).await
+    ) -> Pin<Box<dyn Future<Output = Result<Packet, Error>> + '_>> {
+        let ctl_tx2 = self.ctl_tx.clone();
+        let message_id = req.header.message_id;
+        let token = crate::token_as_u32(req.get_token());
+        Box::pin(DroppableRequest {
+            future: Box::pin(Tokio::do_request(ctl_tx2, req, peer_addr, opts)),
+            completed: false,
+            ctl_tx: self.ctl_tx.clone(),
+            peer_addr,
+            message_id,
+            token,
+        })
     }
 
     async fn observe(
