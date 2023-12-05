@@ -39,19 +39,19 @@ impl Tokio {
                     ctl = ctl_rx.recv() => {
                         match ctl {
                             Some(Ctl::RegisterMessageId(peer_addr, message_id, rx)) => {
-                                debug!("Register message id handler: {}{}", peer_addr, message_id);
+                                debug!("Register message id handler: {} {}", peer_addr, message_id);
                                 message_id_handles.insert((peer_addr, message_id), rx);
                             },
                             Some(Ctl::DeregisterMessageId(peer_addr, message_id)) => {
-                                debug!("Deregister message id handler: {}{}", peer_addr, message_id);
+                                debug!("Deregister message id handler: {} {}", peer_addr, message_id);
                                 message_id_handles.remove(&(peer_addr, message_id));
                             },
                             Some(Ctl::RegisterToken(peer_addr, token, rx)) => {
-                                debug!("Register token handler: {}{:x}", peer_addr, token);
+                                debug!("Register token handler: {} {:x}", peer_addr, token);
                                 token_handles.insert((peer_addr, token), rx);
                             },
                             Some(Ctl::DeregisterToken(peer_addr, token)) => {
-                                debug!("Deregister token handler: {}{:x}", peer_addr, token);
+                                debug!("Deregister token handler: {} {:x}", peer_addr, token);
                                 token_handles.remove(&(peer_addr, token));
                             },
                             Some(Ctl::Send(peer_addr, data)) => {
