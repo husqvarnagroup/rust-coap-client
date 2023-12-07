@@ -66,28 +66,28 @@ pub struct RequestOptions {
     #[structopt(long)]
     /// Disable message acknowlegement
     pub non_confirmable: bool,
-    #[structopt(long, default_value = "3")]
-    /// Number of retries (for acknowleged messages)
+    #[structopt(long, default_value = "4")]
+    /// Number of retries (for acknowleged messages; MAX_RETRANSMIT)
     pub retries: usize,
     #[structopt(long, parse(try_from_str = humantime::parse_duration), default_value = "2s")]
-    /// Request -> ACK timeout, per retry
+    /// Initial timeout (ACK_TIMEOUT)
     pub ack_timeout: Duration,
-    #[structopt(long, parse(try_from_str = humantime::parse_duration), default_value = "60s")]
+    #[structopt(long, default_value = "1.5")]
+    /// Factor for setting initial timeout randomly (> 1.0; ACK_RANDOM_FACTOR)
+    pub ack_random_factor: f32,
+    #[structopt(long, parse(try_from_str = humantime::parse_duration), default_value = "100s")]
     /// Request -> response timeout, after receiving empty ACK
     pub response_timeout: Duration,
-    #[structopt(long, parse(try_from_str = humantime::parse_duration), default_value = "500ms")]
-    /// Base period for exponential backoff
-    pub backoff: Duration,
 }
 
 impl Default for RequestOptions {
     fn default() -> Self {
         Self {
             non_confirmable: false,
-            retries: 3,
+            retries: 4,
             ack_timeout: Duration::from_secs(2),
-            response_timeout: Duration::from_secs(60),
-            backoff: Duration::from_millis(500),
+            ack_random_factor: 1.5,
+            response_timeout: Duration::from_secs(100),
         }
     }
 }

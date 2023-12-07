@@ -2,6 +2,7 @@
 // https://github.com/ryankurte/rust-coap-client
 // Copyright 2021 ryan kurte <ryan@kurte.nz>
 
+use rand::{thread_rng, Rng};
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
@@ -263,8 +264,10 @@ impl Tokio {
         }
 
         // Send request and await response for the allowed number of retries
+        let random_factor = thread_rng().gen_range(1.0..=opts.ack_random_factor);
+        let mut timeout = opts.ack_timeout.mul_f32(random_factor);
         let mut resp = Ok(None);
-        for i in 0..opts.retries {
+        for i in 0..=opts.retries {
             // Encode data
             let data = req.to_bytes().unwrap();
 
@@ -275,14 +278,18 @@ impl Tokio {
             }
 
             // Await response
-            match tokio::time::timeout(opts.ack_timeout, rx.recv()).await {
+            match tokio::time::timeout(timeout, rx.recv()).await {
                 Ok(Some(v)) => {
                     resp = Ok(Some(v));
                     break;
                 }
                 Ok(None) | Err(_) => {
-                    debug!("Timeout awaiting ACK (retry {})", i);
-                    // TODO: await backoff
+                    if i == 0 {
+                        debug!("Timeout awaiting ACK");
+                    } else {
+                        debug!("Timeout awaiting ACK (retry {})", i);
+                    }
+                    timeout *= 2;
                     continue;
                 }
             };
