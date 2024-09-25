@@ -8,6 +8,7 @@ use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use coap_lite::{
     CoapOption, MessageClass, MessageType, ObserveOption, Packet, RequestType, ResponseType,
@@ -289,7 +290,7 @@ impl Tokio {
                     } else {
                         debug!("Timeout awaiting ACK (retry {})", i);
                     }
-                    timeout *= 2;
+                    timeout = Duration::from_secs_f32(timeout.as_secs_f32() * opts.backoff_factor);
                     continue;
                 }
             };

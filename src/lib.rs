@@ -78,6 +78,9 @@ pub struct RequestOptions {
     #[structopt(long, parse(try_from_str = humantime::parse_duration), default_value = "100s")]
     /// Request -> response timeout, after receiving empty ACK
     pub response_timeout: Duration,
+    #[structopt(long, default_value = "2.0")]
+    /// Factor for increasing retry timeout (> 1.0)
+    pub backoff_factor: f32,
 }
 
 impl Default for RequestOptions {
@@ -88,6 +91,7 @@ impl Default for RequestOptions {
             ack_timeout: Duration::from_secs(2),
             ack_random_factor: 1.5,
             response_timeout: Duration::from_secs(100),
+            backoff_factor: 2.0,
         }
     }
 }
